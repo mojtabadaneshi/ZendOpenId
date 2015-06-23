@@ -13,6 +13,7 @@ namespace ZendOpenId\Provider;
 use Zend\Http\Response;
 use ZendOpenId\OpenId;
 use ZendOpenId\Extension;
+use Application\Model\NonceTable;
 
 /**
  * OpenID provider (server) implementation
@@ -315,7 +316,7 @@ class GenericProvider
      * @return mixed
      */
     public function handle($params=null, $extensions=null,
-                           Response $response = null)
+                           Response $response = null,$adapter = null)
     {
         if ($params === null) {
             if ($_SERVER["REQUEST_METHOD"] == "GET") {
@@ -354,7 +355,7 @@ class GenericProvider
                 }
                 return true;
             } elseif ($params['openid_mode'] == 'check_authentication') {
-                $response = $this->_checkAuthentication($version, $params);
+                $response = $this->_checkAuthentication($version, $params, $adapter);
                 $ret = '';
                 foreach ($response as $key => $val) {
                     $ret .= $key . ':' . $val . "\n";
@@ -635,6 +636,8 @@ class GenericProvider
         if ($version >= 2.0) {
             $ret['openid.ns'] = OpenId::NS_2_0;
         }
+       
+        
         $ret = $this->_respond($version, $ret, $params, $extensions);
         if (!empty($params['openid_return_to'])) {
             OpenId::redirect($params['openid_return_to'], $ret, $response);
@@ -654,6 +657,7 @@ class GenericProvider
      */
     protected function _respond($version, $ret, $params, $extensions=null)
     {
+        
         if (empty($params['openid_assoc_handle']) ||
             !$this->_storage->getAssociation($params['openid_assoc_handle'],
                 $macFunc, $secret, $expires)) {
@@ -711,7 +715,6 @@ class GenericProvider
 
         $ret['openid.sig'] = base64_encode(
             OpenId::hashHmac($macFunc, $data, $secret));
-
         return $ret;
     }
 
@@ -724,14 +727,14 @@ class GenericProvider
      * @param array $params GET or POST request variables
      * @return array
      */
-    protected function _checkAuthentication($version, $params)
+    protected function _checkAuthentication($version, $params, $adapter)
     {
+        
         $ret = array();
         if ($version >= 2.0) {
             $ret['ns'] = OpenId::NS_2_0;
         }
         $ret['openid.mode'] = 'id_res';
-
         if (empty($params['openid_assoc_handle']) ||
             empty($params['openid_signed']) ||
             empty($params['openid_sig']) ||
@@ -740,7 +743,17 @@ class GenericProvider
             $ret['is_valid'] = 'false';
             return $ret;
         }
-
+        $nonceTable = new NonceTable($adapter);
+        $nonceData = $nonceTable->checkNonce(($params["openid_response_nonce"]));
+        if ($nonceData) {
+            $ret['is_valid'] = 'false';
+            return $ret;
+        } else {
+            $nonceTable = new NonceTable($adapter);
+            $nonceTable->addNonce($params["openid_response_nonce"]);
+        }
+      
+        
         $signed = explode(',', $params['openid_signed']);
         $data = '';
         foreach ($signed as $key) {
@@ -751,6 +764,8 @@ class GenericProvider
                 $data .= $params['openid_' . strtr($key,'.','_')]."\n";
             }
         }
+      
+        
         if ($this->_secureStringCompare(base64_decode($params['openid_sig']),
             OpenId::hashHmac($macFunc, $data, $secret))) {
             $ret['is_valid'] = 'true';
